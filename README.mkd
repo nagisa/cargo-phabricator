@@ -1,0 +1,13 @@
+`cargo-phabricator` is a tool to help integration of your rust build pipelines with phabricator
+review tools.
+
+Just replace your `cargo test ARGS` with `cargo phabricator test -- ARGS`, export the environment
+variables with API key and the buildable PHID, and things should work out almost transparently.
+
+Cargo commands supported by this tool:
+
+* `build` - publishes build errors as inline lint messages;
+* `lint` - publishes build errors as inline lint messages;
+* `check` - publishes build errors as inline lint messages;
+* `test` - publishes test results as phabricator unit test results;
+    * NOTE: currently relies on projects not using custom test harnesses.
