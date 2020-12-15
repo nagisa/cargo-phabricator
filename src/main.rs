@@ -38,6 +38,7 @@ fn main() {
     let check_subcommand = subcommand_args(clap::SubCommand::with_name("check"));
     let build_subcommand = subcommand_args(clap::SubCommand::with_name("build"));
     let test_subcommand = subcommand_args(clap::SubCommand::with_name("test"));
+    let clippy_subcommand = subcommand_args(clap::SubCommand::with_name("clippy"));
 
     let cli = clap::App::new(clap::crate_name!())
         .version(clap::crate_version!())
@@ -79,7 +80,8 @@ fn main() {
         .subcommand(fmt_subcommand)
         .subcommand(check_subcommand)
         .subcommand(build_subcommand)
-        .subcommand(test_subcommand);
+        .subcommand(test_subcommand)
+        .subcommand(clippy_subcommand);
 
     let matches = cli.get_matches();
     let result: Result<(), Box<dyn std::error::Error>> = tokio::runtime::Builder::new()
@@ -105,7 +107,8 @@ fn main() {
             };
             match matches.subcommand() {
                 ("fmt", Some(args)) => ctxt.fmt(args).await.map_err(Into::into),
-                ("check", Some(args)) => check::run(args).await,
+                ("check", Some(args)) => ctxt.check("check", args).await.map_err(Into::into),
+                ("clippy", Some(args)) => ctxt.check("clippy", args).await.map_err(Into::into),
                 ("build", Some(args)) => Ok(()),
                 ("test", Some(args)) => Ok(()),
                 (sc, Some(args)) => Err("unimplemented subcommand".into()),

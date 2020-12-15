@@ -47,6 +47,7 @@ pub(crate) struct Lint {
     pub(crate) path: Cow<'static, Path>,
     pub(crate) description: Option<Cow<'static, str>>,
     pub(crate) line: Option<u64>,
+    pub(crate) column: Option<u64>,
 }
 
 impl Lint {
@@ -54,11 +55,19 @@ impl Lint {
         if let Severity::Disabled = self.severity { return; }
 
         if let Some(line) = self.line {
-            println!(
-                "{}[{}]: {}\n   --> {}:{}",
-                self.severity, self.code, self.name,
-                self.path.display(), line
-            );
+            if let Some(column) = self.column {
+                println!(
+                    "{}[{}]: {}\n   --> {}:{}:{}",
+                    self.severity, self.code, self.name,
+                    self.path.display(), line, column
+                );
+            } else {
+                println!(
+                    "{}[{}]: {}\n   --> {}:{}",
+                    self.severity, self.code, self.name,
+                    self.path.display(), line
+                );
+            }
         } else {
             println!(
                 "{}[{}]: {}\n   --> {}",

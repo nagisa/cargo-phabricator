@@ -6,16 +6,16 @@ use std::path::{Path, PathBuf};
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
-    #[error("could not obtain arguments to pass to `cargo fmt`")]
-    GetArgs,
     #[error("could not spawn `cargo fmt`")]
     SpawnCargoFmt(#[source] std::io::Error),
     #[error("could not read a line of `cargo fmt` output")]
     ReadLine(#[source] std::io::Error),
-    #[error("there were formatting issues")]
-    Formatting,
     #[error("could not publish lints to phabricator")]
     PublishLints(#[source] crate::phab::Error),
+    #[error("could not obtain the exit code")]
+    WaitChild(#[source] std::io::Error),
+    #[error("command failed with exit code {0}")]
+    ExitStatus(std::process::ExitStatus),
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -55,9 +55,9 @@ fn make_lint(file: &Path, mismatch: &MismatchSchema) -> Result<crate::phab::Lint
         path: PathBuf::from(file).into(),
         description: Some(description.into()),
         line: Some(mismatch.original_end_line),
+        column: None,
     })
 }
-
 
 impl crate::Context {
     pub(crate) async fn fmt(&self, args: &clap::ArgMatches<'_>) -> Result<(), Error> {
@@ -69,8 +69,8 @@ impl crate::Context {
         if let Some(args) = args.values_of_os("args") {
             cmd.args(args);
         }
-        let child = cmd.spawn().map_err(Error::SpawnCargoFmt)?;
-        let mut stdout = tokio::io::BufReader::new(child.stdout.expect("we're capturing the stdout"));
+        let mut child = cmd.spawn().map_err(Error::SpawnCargoFmt)?;
+        let mut stdout = tokio::io::BufReader::new(child.stdout.as_mut().expect("we're capturing the stdout"));
         let mut line = Vec::with_capacity(1024);
         let mut lints = Vec::with_capacity(64);
         loop {
@@ -97,14 +97,18 @@ impl crate::Context {
                 }
             }
         }
-        if lints.is_empty() {
-            return Ok(());
-        }
-        self.publish_work(
-            &lints,
-            &[],
-        ).await.map_err(Error::PublishLints)?;
 
-        Err(Error::Formatting)
+        let exit_status = child.wait_with_output().await.map_err(Error::WaitChild)?.status;
+        if !lints.is_empty() {
+            self.publish_work(
+                &lints,
+                &[],
+            ).await.map_err(Error::PublishLints)?;
+        }
+        if !exit_status.success() {
+            Err(Error::ExitStatus(exit_status))
+        } else {
+            Ok(())
+        }
     }
 }
