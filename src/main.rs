@@ -2,6 +2,7 @@ mod phab;
 mod arcconfig;
 mod check;
 mod fmt;
+mod jsonl;
 
 /// Context containing data typically shared between the subcommands.
 struct Context {
@@ -31,7 +32,9 @@ struct GetBuildPhidError;
 #[error("--conduit-token not available")]
 struct GetConduitTokenError;
 
-
+#[derive(thiserror::Error, Debug)]
+#[error("subcommand is not implemented")]
+struct UnimplementedSubcommand;
 
 fn main() {
     let fmt_subcommand = subcommand_args(clap::SubCommand::with_name("fmt"));
@@ -109,10 +112,10 @@ fn main() {
                 ("fmt", Some(args)) => ctxt.fmt(args).await.map_err(Into::into),
                 ("check", Some(args)) => ctxt.check("check", args).await.map_err(Into::into),
                 ("clippy", Some(args)) => ctxt.check("clippy", args).await.map_err(Into::into),
-                ("build", Some(args)) => Ok(()),
+                ("build", Some(args)) => ctxt.check("build", args).await.map_err(Into::into),
                 ("test", Some(args)) => Ok(()),
-                (sc, Some(args)) => Err("unimplemented subcommand".into()),
-                (sc, None) => Err(format!("clap did not produce args for {}", sc).into()),
+                (sc, Some(args)) => Err(UnimplementedSubcommand.into()),
+                (sc, None) => panic!("clap did not produce args for {}", sc),
             }
         }));
 

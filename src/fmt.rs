@@ -1,21 +1,17 @@
 use tokio::process::Command;
-use tokio::io::AsyncBufReadExt;
 use futures::StreamExt;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use crate::jsonl::FilterReportedExt;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
-    #[error("could not spawn `cargo fmt`")]
-    SpawnCargoFmt(#[source] std::io::Error),
-    #[error("could not read a line of `cargo fmt` output")]
-    ReadLine(#[source] std::io::Error),
     #[error("could not publish lints to phabricator")]
     PublishLints(#[source] crate::phab::Error),
-    #[error("could not obtain the exit code")]
-    WaitChild(#[source] std::io::Error),
-    #[error("command failed with exit code {0}")]
-    ExitStatus(std::process::ExitStatus),
+    #[error("could not get command output")]
+    CommandOutput(#[source] crate::jsonl::Error),
+    #[error("formatting issues found")]
+    Formatting,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -61,31 +57,29 @@ fn make_lint(file: &Path, mismatch: &MismatchSchema) -> Result<crate::phab::Lint
 
 impl crate::Context {
     pub(crate) async fn fmt(&self, args: &clap::ArgMatches<'_>) -> Result<(), Error> {
-        let mut cmd = Command::new("cargo");
+        let mut lints = Vec::with_capacity(64);
+        let result = self.fmt_inner(&mut lints, args).await;
+        if !lints.is_empty() {
+            self.publish_work(
+                &lints,
+                &[],
+            ).await.map_err(Error::PublishLints)?;
+            return Err(Error::Formatting);
+        }
+        result
+    }
 
+    pub(crate) async fn fmt_inner(&self, lints: &mut Vec<crate::phab::Lint>, args: &clap::ArgMatches<'_>) -> Result<(), Error> {
+        let mut cmd = Command::new("cargo");
         cmd.arg("fmt")
             .arg("--message-format").arg("json")
-            .stdout(std::process::Stdio::piped());
+            .kill_on_drop(true);
         if let Some(args) = args.values_of_os("args") {
             cmd.args(args);
         }
-        let mut child = cmd.spawn().map_err(Error::SpawnCargoFmt)?;
-        let mut stdout = tokio::io::BufReader::new(child.stdout.as_mut().expect("we're capturing the stdout"));
-        let mut line = Vec::with_capacity(1024);
-        let mut lints = Vec::with_capacity(64);
-        loop {
-            line.clear();
-            stdout.read_until(b'\n', &mut line).await.map_err(Error::ReadLine)?;
-            if line.is_empty() {
-                break;
-            }
-            let files: Vec<FileSchema> = match serde_json::from_slice(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("warning: `cargo fmt` output a line that couldn't be parsed: {}\n{}", e, String::from_utf8_lossy(&line));
-                    continue;
-                }
-            };
+        let mut values = self.get_stdout_json_lines(cmd).filter_reported();
+        while let Some(result) = values.next().await {
+            let files: Vec<FileSchema> = result.map_err(Error::CommandOutput)?;
             for file in files {
                 for mismatch in &file.mismatches {
                     let filename = Path::new(&file.name);
@@ -93,22 +87,9 @@ impl crate::Context {
                     let lint = make_lint(filename, mismatch)?;
                     lint.report();
                     lints.push(lint);
-
                 }
             }
         }
-
-        let exit_status = child.wait_with_output().await.map_err(Error::WaitChild)?.status;
-        if !lints.is_empty() {
-            self.publish_work(
-                &lints,
-                &[],
-            ).await.map_err(Error::PublishLints)?;
-        }
-        if !exit_status.success() {
-            Err(Error::ExitStatus(exit_status))
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }

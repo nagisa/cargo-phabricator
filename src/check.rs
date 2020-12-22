@@ -1,24 +1,14 @@
 use tokio::process::Command;
-use tokio::io::AsyncBufReadExt;
 use std::path::PathBuf;
+use futures::StreamExt;
+use crate::jsonl::FilterReportedExt;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
-    #[error("could not spawn `cargo fmt`")]
-    SpawnCargoCheck(#[source] std::io::Error),
-    #[error("could not read a line of `cargo fmt` output")]
-    ReadLine(#[source] std::io::Error),
     #[error("could not publish lints to phabricator")]
     PublishLints(#[source] crate::phab::Error),
-    #[error("could not obtain the exit code")]
-    WaitChild(#[source] std::io::Error),
-    #[error("command failed with exit code {0}")]
-    ExitStatus(std::process::ExitStatus),
-}
-
-#[derive(serde::Deserialize)]
-struct ReasonSchema {
-    reason: String,
+    #[error("could not get command output")]
+    CommandOutput(#[source] crate::jsonl::Error),
 }
 
 #[derive(serde::Deserialize)]
@@ -78,42 +68,29 @@ struct LintSchema {
 
 impl crate::Context {
     pub(crate) async fn check(&self, subcommand: &str, args: &clap::ArgMatches<'_>) -> Result<(), Error> {
-        let mut cmd = Command::new("cargo");
+        let mut lints = Vec::with_capacity(64);
+        let result = self.check_inner(&mut lints, subcommand, args).await;
+        if !lints.is_empty() {
+            self.publish_work(
+                &lints,
+                &[],
+            ).await.map_err(Error::PublishLints)?;
+        }
+        result
+    }
 
+    async fn check_inner(&self, lints: &mut Vec<crate::phab::Lint>, subcommand: &str, args: &clap::ArgMatches<'_>) -> Result<(), Error> {
+        let mut cmd = Command::new("cargo");
         cmd.arg(subcommand)
-            .arg("--message-format").arg("json")
-            .stdout(std::process::Stdio::piped());
+           .arg("--message-format").arg("json")
+           .kill_on_drop(true);
         if let Some(args) = args.values_of_os("args") {
             cmd.args(args);
         }
-        let mut child = cmd.spawn().map_err(Error::SpawnCargoCheck)?;
-        let mut stdout = tokio::io::BufReader::new(child.stdout.as_mut().expect("we're capturing the stdout"));
-        let mut line = Vec::with_capacity(1024);
-        let mut lints = Vec::with_capacity(64);
-        loop {
-            line.clear();
-            stdout.read_until(b'\n', &mut line).await.map_err(Error::ReadLine)?;
-            if line.is_empty() {
-                break;
-            }
-
-            match serde_json::from_slice(&line) {
-                Ok(ReasonSchema { reason }) if reason == "compiler-message" => {},
-                Ok(_) => continue,
-                Err(e) => {
-                    eprintln!("warning: `cargo check` output a line that couldn't be parsed: {}\n{}", e, String::from_utf8_lossy(&line));
-                    continue;
-                }
-            }
-
-            let lint: LintSchema = match serde_json::from_slice(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("warning: `cargo check` output a line that couldn't be parsed: {}\n{}", e, String::from_utf8_lossy(&line));
-                    continue;
-                }
-            };
-
+        let values = self.get_reason_json_lines(cmd, "compiler-message").filter_reported();
+        futures::pin_mut!(values);
+        while let Some(result) = values.next().await {
+            let lint: LintSchema = result.map_err(Error::CommandOutput)?;
             // So far it seems that the only messages where the code is missing are things like `N
             // warnings emitted`.
             let code = if let Some(code) = lint.message.code {
@@ -146,24 +123,9 @@ impl crate::Context {
                     }
                 },
             };
-
             lint.report();
             lints.push(lint);
         }
-
-        let exit_status = child.wait_with_output().await.map_err(Error::WaitChild)?.status;
-        if !lints.is_empty() {
-            self.publish_work(
-                &lints,
-                &[],
-            ).await.map_err(Error::PublishLints)?;
-        }
-        if !exit_status.success() {
-            Err(Error::ExitStatus(exit_status))
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
-
 }
-
