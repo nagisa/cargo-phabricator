@@ -81,7 +81,7 @@ impl Lint {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum TestResult {
     Pass,
@@ -91,14 +91,14 @@ pub(crate) enum TestResult {
     Unsound,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 pub(crate) struct Test {
-    name: Cow<'static, str>,
-    result: TestResult,
-    namespace: Option<Cow<'static, str>>,
-    duration: Option<f64>,
-    details: Option<&'static str>,
-    format: Option<&'static str>,
+    pub(crate) name: Cow<'static, str>,
+    pub(crate) result: TestResult,
+    pub(crate) namespace: Option<Cow<'static, str>>,
+    pub(crate) duration: Option<f64>,
+    pub(crate) details: Option<&'static str>,
+    pub(crate) format: Option<&'static str>,
 }
 
 #[derive(serde::Serialize)]

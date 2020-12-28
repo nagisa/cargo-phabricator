@@ -2,6 +2,7 @@ mod phab;
 mod arcconfig;
 mod check;
 mod fmt;
+mod test;
 mod jsonl;
 
 /// Context containing data typically shared between the subcommands.
@@ -113,7 +114,7 @@ fn main() {
                 ("check", Some(args)) => ctxt.check("check", args).await.map_err(Into::into),
                 ("clippy", Some(args)) => ctxt.check("clippy", args).await.map_err(Into::into),
                 ("build", Some(args)) => ctxt.check("build", args).await.map_err(Into::into),
-                ("test", Some(args)) => Ok(()),
+                ("test", Some(args)) => ctxt.test(args).await.map_err(Into::into),
                 (sc, Some(args)) => Err(UnimplementedSubcommand.into()),
                 (sc, None) => panic!("clap did not produce args for {}", sc),
             }
